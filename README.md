@@ -2,7 +2,7 @@
 Contains a simple app for providing text prompts based on the Mackenzie & Soukoreff 2003 dataset. Quick start:  
 
 ```batch
-git submodule add git@github.com:Neuro-Mechatronics-Interfaces/matlab_class__Typewriter.git +typewriter
+git submodule add git@github.com:Neuro-Mechatronics-Interfaces/matlab_package__typewriter.git +typewriter
 git submodule update --init --recursive
 ```
 
@@ -38,7 +38,9 @@ The interface is implemented as a MATLAB class (`Prompter`) and includes a graph
 3. Place the project directory in your MATLAB path.
 
 ## Usage
-### Basic Initialization
+If you have correctly installed the contents of this repository to a folder named `+typewriter` which is on your workspace path in the MATLAB editor, then you can test/observe how the UDP interface runs by running the following command:  
 ```matlab
-% Create a Prompter instance with default settings
-prompter = typewriter.Prompter();
+typewriter.example_auto_prompter;
+```  
+![If typewriter.example_auto_prompter ran correctly, it should look like this](demo.gif)
+This should launch a script which will automatically read the current prompt (via JSON-serialized UDP message exchange, read from the loaded prompts that by default are found in `+typewriter/@Prompter/config/phrases.txt`), looking similar to the gif shown above. The main loop has a pause delay of 0.1 seconds; you can reduce this time to see that it increases the words/minute and bits/second throughput, as expected.  
