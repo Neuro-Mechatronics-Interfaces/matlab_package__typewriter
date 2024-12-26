@@ -20,16 +20,18 @@ classdef Prompter < handle
         udpObj_  % UDP port object
         prompt_   % Current prompt
         phrases_  % List of phrases_
-        wordInformation_ (1,1) double = 0.0; % Average information per word in phrases.txt (or other list of phrases)
+        wordInformation_ (1,1) double = 0.0; % Average information per word in phrases_default.txt (or other list of phrases)
         phraseIndex_ (1,1) double = 0 % Current phrase index.
         promptLength_ (1,1) double = 1 % Current prompt length.
         promptWords_ (1,1) double = 0;
         startTic_ (1,1) uint64 = tic;
+        mainTic_ (1,1) uint64 = tic;
         wpm (:,1) = [];
     end
 
     properties (Constant, Access = private)
-        DEFAULT_PHRASES_FILE {mustBeTextScalar} = "config/phrases.txt";
+        DEFAULT_PHRASES_FILE {mustBeTextScalar} = "config/phrases_default.txt";
+        BINARY_LOGFILE_EXTENSION = "typewriterdata";
     end
     
     properties (Hidden, Access = public)
@@ -43,6 +45,7 @@ classdef Prompter < handle
         promptBackground_ % Color behind each letter, displayed on promptAxes_
         inputBox_    % UI element for text input
         remote_ (:,1) string = strings(0,1);
+        logFileID_ double = [];
     end
 
     methods
@@ -54,7 +57,10 @@ classdef Prompter < handle
                 options.Port (1,1) {mustBeInteger} = 7053;
                 options.PhrasesFile {mustBeTextScalar} = "";
                 options.AutoAdvanceOnComplete (1,1) logical = false;
+                options.MainTick (1,1) double = tic();
             end
+
+            obj.mainTic_ = options.MainTick;
 
             % Initialize UDP
             obj.initializeUDP_(options.Port);
@@ -89,6 +95,11 @@ classdef Prompter < handle
             obj.startTic_ = tic;
         end
 
+        function delete(obj)
+            try %#ok<TRYNC>
+                obj.stopLogging();
+            end
+        end
 
         function clearInputBox(obj, src)
             try
@@ -172,15 +183,38 @@ classdef Prompter < handle
                 warning('Index out of bounds.');
             end
         end
-        
-        function addPhrase(obj, phrase)
-            % Logic to add a phrase
-            obj.phrases_{end+1} = phrase;
+
+        % Begin logging to file
+        function startLogging(obj, logFile)
+            %STARTLOGGING Tries to open binary file for logging.
+            arguments
+                obj
+                logFile {mustBeTextScalar}
+            end
+            if ~isempty(obj.logFileID_)
+                warning("Already logging to file. Did not start new logging session.");
+                return;
+            end
+            validFilename = obj.ensureValidLogFilename(logFile);
+            obj.logFileID_ = fopen(validFilename, 'wb');
+            % Make sure to update the callback now that we have changed
+            % property of this object.
+            obj.udpObj_.configureCallback("off");
+            pause(0.001);
+            obj.udpObj_.configureCallback("terminator", @(src, event)onMessageReceived(obj, src, event));
+            pause(0.001);
         end
-        
-        function removePhrase(obj, index)
-            % Logic to remove a phrase by index
-            obj.phrases_(index) = [];
+
+        function stopLogging(obj)
+            %STOPLOGGING Tries to stop logging and close log file if it is open.
+            arguments
+                obj
+            end
+            if isempty(obj.logFileID_)
+                return;
+            end
+            fclose(obj.logFileID_);
+            obj.logFileID_ = [];
         end
 
         function pause(obj)
@@ -260,12 +294,6 @@ classdef Prompter < handle
                     obj.loadSpecific(msg.index);
                 case typewriter.PrompterMethod.LoadPhrases
                     obj.loadPhrases_(msg.filepath);
-                case typewriter.PrompterMethod.AddPhrase
-                    obj.addPhrase(msg.phrase);
-                case typewriter.PrompterMethod.RemovePhrase
-                    obj.removePhrase(msg.index);
-                case typewriter.PrompterMethod.SavePhrases
-                    obj.savePhrases_(msg.filepath);
                 case typewriter.PrompterMethod.GetPrompt
                     value = obj.getPrompt();
                 case typewriter.PrompterMethod.GetNumPhrases
@@ -303,6 +331,8 @@ classdef Prompter < handle
             elseif src.Editable == matlab.lang.OnOffSwitchState.off
                 return;
             end
+            ts = single(toc(obj.mainTic_));
+
             correct = 0;
             for i = 1:min(strlength(input), obj.promptLength_)
                 if strcmpi(input(i),obj.prompt_(i))
@@ -313,7 +343,9 @@ classdef Prompter < handle
                 end
             end
             obj.lastInput = uint8(input(end));
-            % disp(evt);
+            if ~isempty(obj.logFileID_)
+                typewriter.Prompter.write(obj.logFileID_, ts, obj.lastInput);
+            end
             if correct == obj.promptLength_
                 % disp("Complete!");
                 notify(obj, 'PromptComplete');
@@ -370,7 +402,7 @@ classdef Prompter < handle
             end
         end
         
-        % Datagram received callback
+        % JSON-Serialized UDP received callback (for newline-terminated byte messages)
         function onMessageReceived(obj, src, ~)
             %ONMESSAGERECEIVED Terminator-callback of obj.udpObj_.
             try
@@ -456,6 +488,19 @@ classdef Prompter < handle
     end
 
     methods (Access = protected)
+        function validFilename = ensureValidLogFilename(obj, filename)
+            %ENSUREVALIDLOGFILENAME Ensures that the log-file binary has correct file-extension and that the folder it is to be saved in actually exists.
+            [p,f,~] = fileparts(filename);
+            % Make sure folder containing new file exists:
+            if strlength(p) < 1
+                p = pwd;
+            elseif exist(p, 'dir') == 0
+                mkdir(p);
+            end
+            % Make sure that file extension is correct
+            validFilename = string(fullfile(p, sprintf("%s.%s", f, obj.BINARY_LOGFILE_EXTENSION)));
+        end
+
         function loadPhrases_(obj, filepath)
             % Load phrases from the specified file
             if isfile(filepath)
@@ -467,11 +512,6 @@ classdef Prompter < handle
             else
                 error("File not found: %s", filepath);
             end
-        end
-        
-        function savePhrases_(obj, filepath)
-            % Logic to save phrases_ to a file
-            writelines(obj.phrases_, filepath);
         end
 
         % Initialize the GUI Figure
@@ -574,8 +614,8 @@ classdef Prompter < handle
                                   "EnablePortSharing", true);
             obj.udpObj_.UserData = struct("NumErrors", 0);
             obj.udpObj_.Tag = "Prompter UDP Receiver";
-            obj.udpObj_.configureCallback("terminator", @(src, event)obj.onMessageReceived(src, event));
-            obj.udpObj_.ErrorOccurredFcn = @(src,evt)typewriter.Prompter.handleJsonError(src, evt);
+            obj.udpObj_.configureCallback("terminator", @(src, event)onMessageReceived(obj, src, event));
+            % obj.udpObj_.ErrorOccurredFcn = @(src,evt)typewriter.Prompter.handleJsonError(src, evt);
         end
     end
 
@@ -584,6 +624,66 @@ classdef Prompter < handle
             me = evt.Error;
             warning(me.identifier, "Error during JSON UDP-handling: %s", me.message);
             src.NumErrors = src.NumErrors + 1;
+        end
+
+        function write(fid, ts, datum)
+            %WRITE Logs a single record to the binary file.
+            % Input:
+            %   fid - File ID to write to
+            %   ts - A single-precision relative timestamp (seconds since
+            %           some main alignment timestamp).
+            %   datum - A single character from an input keystroke.
+        
+            % Write the relative timestamp and uint8 value to the binary file
+            fwrite(fid, ts, 'single');
+            fwrite(fid, datum, 'uint8');
+        end
+
+        function dataTable = read(fileName)
+            %READ Reads a binary log file and returns a table of records.
+            % Input:
+            %   fileName - Name of the binary file to read.
+            % Output:
+            %   dataTable - A table with columns:
+            %               - .Time: Relative timestamps (single precision).
+            %               - .Keystroke: Characters corresponding to uint8 values.
+    
+            % Open the file for reading
+            fileID = fopen(fileName, 'rb');
+            assert(fileID > 0, 'Failed to open file.');
+    
+            % Initialize arrays to store data
+            timestamps = [];
+            keystrokes = [];
+    
+            try
+                % Read the file until the end
+                while ~feof(fileID)
+                    % Read a single-precision timestamp
+                    timestamp = fread(fileID, 1, 'single');
+                    if isempty(timestamp)
+                        break;
+                    end
+                    timestamps = [timestamps; timestamp]; %#ok<AGROW>
+    
+                    % Read the corresponding uint8 value and convert to char
+                    datum = fread(fileID, 1, 'uint8');
+                    if isempty(datum)
+                        break;
+                    end
+                    keystrokes = [keystrokes; char(datum)]; %#ok<AGROW>
+                end
+            catch ME
+                fclose(fileID);
+                rethrow(ME);
+            end
+    
+            % Close the file
+            fclose(fileID);
+    
+            % Return the data as a table
+            dataTable = table(timestamps, keystrokes, ...
+                              'VariableNames', {'Time', 'Keystroke'});
         end
 
         infoContent = estimateWordInformation(phrases);
