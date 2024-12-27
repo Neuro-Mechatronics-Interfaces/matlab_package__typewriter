@@ -507,7 +507,7 @@ classdef Prompter < handle
                 obj.phrases_ = strtrim(readlines(filepath));
                 obj.phrases_ = obj.phrases_(cellfun(@(c)strlength(c)>0,obj.phrases_));
                 obj.phraseIndex_ = 1; % Reset phrase index
-                obj.wordInformation_ = typewriter.Prompter.estimateWordInformation(obj.phrases_);
+                obj.wordInformation_ = (typewriter.Prompter.estimateWordInformation(obj.phrases_) + typewriter.Prompter.estimateInformationPerToken(obj.phrases_)) / 2;
                 fprintf(1,'Using phrases in %s (average information per word: %.1f bits).\n', filepath, round(obj.wordInformation_,1));
             else
                 error("File not found: %s", filepath);
@@ -687,5 +687,6 @@ classdef Prompter < handle
         end
 
         infoContent = estimateWordInformation(phrases);
+        infoPerToken = estimateInformationPerToken(phrases);
     end
 end
